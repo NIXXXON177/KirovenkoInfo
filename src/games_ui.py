@@ -52,7 +52,12 @@ def _line(settings: Settings, g: GameSnap) -> str:
     pv = _preview(g.description, PREVIEW_CHARS)
     if pv:
         lines.append(f"Описание: {pv}")
-    lines.append(f"Подробнее: /game {g.id}")
+        lines.append(f"Полный текст (если длинное): /game {g.id}")
+    else:
+        lines.append(
+            "Описание в снимке пустое (после опроса подтянется). "
+            f"Полный текст: /game {g.id}"
+        )
     return "\n".join(lines)
 
 
@@ -70,7 +75,10 @@ def games_list_text_and_keyboard(
     page = max(0, min(page, total_pages - 1))
     chunk = games[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
 
-    header = f"🎮 Игры: всего {n}, страница {page + 1} из {total_pages}\n\n"
+    header = (
+        f"🎮 Игры: всего {n}, страница {page + 1} из {total_pages}\n"
+        f"Полное описание игры: /game и ID (число в строке «ID …»).\n\n"
+    )
     body = "\n\n".join(_line(settings, g) for g in chunk)
     text = header + body
 
