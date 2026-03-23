@@ -12,10 +12,11 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command, CommandStart
-from aiogram.types import ErrorEvent, Message
+from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from .config import load_settings
+from .games_ui import GamesListCb, games_list_text_and_keyboard
 from .db_loader import build_snapshot_db_session
 from .diff_events import diff_snapshots
 from .donatov import build_snapshot, enrich_game_and_products
@@ -170,7 +171,9 @@ async def poll_loop_database(bot: Bot, settings) -> None:
 async def cmd_start(message: Message) -> None:
     await message.answer(
         "Бот мониторинга Donatov.net.\n"
-        "Команды: /status — сводка по последнему снимку.\n"
+        "Команды:\n"
+        "/status — сводка по последнему снимку.\n"
+        "/games — список игр по страницам.\n"
         "Первый успешный опрос сохраняет базу без уведомлений."
     )
 
@@ -195,6 +198,37 @@ async def cmd_status(message: Message) -> None:
         f"Товары: {len(snap.products)}\n"
         f"Интервал: {settings.poll_interval_sec} с"
     )
+
+
+@router.message(Command("games"))
+async def cmd_games(message: Message) -> None:
+    settings = load_settings()
+    snap = load_snapshot(settings.state_path)
+    if not snap:
+        await message.answer("Снимок ещё не создан — дождитесь первого опроса.")
+        return
+    text, kb = games_list_text_and_keyboard(settings, snap, page=0)
+    await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(GamesListCb.filter())
+async def on_games_page(callback: CallbackQuery, callback_data: GamesListCb) -> None:
+    settings = load_settings()
+    snap = load_snapshot(settings.state_path)
+    if not snap:
+        await callback.answer("Снимок ещё не создан.", show_alert=True)
+        return
+    text, kb = games_list_text_and_keyboard(settings, snap, page=callback_data.page)
+    if callback.message is None:
+        await callback.answer()
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        log.exception("games list edit failed")
+        await callback.answer("Не удалось обновить список.", show_alert=True)
+        return
+    await callback.answer()
 
 
 async def main() -> None:
