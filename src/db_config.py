@@ -32,6 +32,7 @@ class DbSourceConfig:
     game_id: str
     game_name: str
     game_enabled: str | None
+    game_description: str | None
     game_deleted_at: str | None
     product_id: str
     product_name: str
@@ -57,6 +58,7 @@ def load_db_source_config() -> DbSourceConfig:
         game_id=_env_str("DB_GAME_ID", "id"),
         game_name=_env_str("DB_GAME_NAME", "name"),
         game_enabled=_env_opt("DB_GAME_ENABLED", "enabled"),
+        game_description=_env_opt("DB_GAME_DESCRIPTION"),
         game_deleted_at=_env_opt("DB_GAME_DELETED_AT"),
         product_id=_env_str("DB_PRODUCT_ID", "id"),
         product_name=_env_str("DB_PRODUCT_NAME", "name"),

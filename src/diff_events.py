@@ -82,6 +82,13 @@ def diff_snapshots(old: SiteSnapshot | None, new: SiteSnapshot) -> list[Event]:
                     dedupe_key=f"game_name_{gid}_{hash(g.name)}",
                 )
             )
+        if (og.description or "") != (g.description or ""):
+            events.append(
+                Event(
+                    text=f"🟡 Изменено описание игры 🎮 {g.name} 🆔 ID: {g.id}",
+                    dedupe_key=f"game_desc_{gid}_{_digest(g.description)}",
+                )
+            )
 
     for gid, g in old_g.items():
         if gid not in new_g:

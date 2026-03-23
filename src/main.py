@@ -11,12 +11,16 @@ import aiohttp
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramNetworkError
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from .config import load_settings
-from .games_ui import GamesListCb, games_list_text_and_keyboard
+from .games_ui import (
+    GamesListCb,
+    format_game_detail_chunks,
+    games_list_text_and_keyboard,
+)
 from .db_loader import build_snapshot_db_session
 from .diff_events import diff_snapshots
 from .donatov import build_snapshot, enrich_game_and_products
@@ -174,6 +178,7 @@ async def cmd_start(message: Message) -> None:
         "Команды:\n"
         "/status — сводка по последнему снимку.\n"
         "/games — список игр по страницам.\n"
+        "/game ID — полное описание игры (ID из /games).\n"
         "Первый успешный опрос сохраняет базу без уведомлений."
     )
 
@@ -198,6 +203,28 @@ async def cmd_status(message: Message) -> None:
         f"Товары: {len(snap.products)}\n"
         f"Интервал: {settings.poll_interval_sec} с"
     )
+
+
+@router.message(Command("game"))
+async def cmd_game(message: Message, command: CommandObject) -> None:
+    raw = (command.args or "").strip().split()
+    gid_s = raw[0] if raw else ""
+    if not gid_s.isdigit():
+        await message.answer(
+            "Укажите числовой ID игры из списка /games, например: /game 104"
+        )
+        return
+    settings = load_settings()
+    snap = load_snapshot(settings.state_path)
+    if not snap:
+        await message.answer("Снимок ещё не создан — дождитесь первого опроса.")
+        return
+    chunks = format_game_detail_chunks(settings, snap, int(gid_s))
+    if chunks is None:
+        await message.answer(f"Игра с ID {gid_s} не найдена в снимке.")
+        return
+    for part in chunks:
+        await message.answer(part)
 
 
 @router.message(Command("games"))

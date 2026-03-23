@@ -26,6 +26,38 @@ def _game_id_from_cover(cover: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _html_to_plain(html_s: str) -> str:
+    if not html_s:
+        return ""
+    s = html_lib.unescape(html_s)
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(
+        r"</(p|div|h[1-6]|li|tr|details|summary)\s*>",
+        "\n",
+        s,
+        flags=re.I,
+    )
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def _game_description_from_resource(resource: dict[str, Any]) -> str:
+    data = resource.get("data")
+    if not isinstance(data, dict):
+        return ""
+    html_d = str(data.get("description_html") or "").strip()
+    if html_d:
+        plain = _html_to_plain(html_d)
+        if plain:
+            return plain
+    short_d = str(data.get("short_description") or "").strip()
+    if short_d:
+        return short_d
+    return str(data.get("meta_description") or "").strip()
+
+
 def _extract_vue_resource(html: str) -> dict[str, Any] | None:
     start = html.find('<vue-good-page')
     if start == -1:
@@ -171,6 +203,7 @@ async def build_snapshot(base_url: str, session: aiohttp.ClientSession, timeout:
             cat_id=int(cat_id) if cat_id is not None else None,
             enabled=True,
             good_type=None,
+            description="",
         )
 
     return snap
@@ -193,6 +226,7 @@ async def enrich_game_and_products(
     enabled = game.enabled
     good_type = game.good_type
     name = game.name
+    description = ""
     if resource:
         g = resource.get("good") or {}
         if isinstance(g, dict):
@@ -200,6 +234,15 @@ async def enrich_game_and_products(
                 enabled = bool(g["enabled"])
             good_type = str(g.get("type") or good_type or "")
             name = str(g.get("name") or name)
+        description = _game_description_from_resource(resource)
+    if not description:
+        m = re.search(
+            r'<meta\s+name="description"\s+content="([^"]*)"',
+            html,
+            re.I,
+        )
+        if m:
+            description = html_lib.unescape(m.group(1)).strip()
 
     updated = GameSnap(
         id=game.id,
@@ -208,6 +251,7 @@ async def enrich_game_and_products(
         cat_id=game.cat_id,
         enabled=enabled,
         good_type=good_type,
+        description=description,
     )
 
     products: dict[str, ProductSnap] = {}

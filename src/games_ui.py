@@ -6,20 +6,54 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .config import Settings
 from .state_store import GameSnap, SiteSnapshot
 
-PAGE_SIZE = 12
+PAGE_SIZE = 10
+PREVIEW_CHARS = 120
+MSG_SOFT_LIMIT = 4000
 
 
 class GamesListCb(CallbackData, prefix="gl"):
     page: int
 
 
+def split_telegram_chunks(text: str, limit: int = MSG_SOFT_LIMIT) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    rest = text
+    while rest:
+        if len(rest) <= limit:
+            chunks.append(rest)
+            break
+        cut = rest.rfind("\n\n", 0, limit)
+        if cut < limit // 2:
+            cut = rest.rfind(" ", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(rest[:cut])
+        rest = rest[cut:].lstrip()
+    return chunks
+
+
+def _preview(desc: str, n: int) -> str:
+    d = (desc or "").strip().replace("\n", " ")
+    if not d:
+        return ""
+    if len(d) <= n:
+        return d
+    return d[: n - 1].rstrip() + "…"
+
+
 def _line(settings: Settings, g: GameSnap) -> str:
     st = "✓" if g.enabled else "✗"
     u = (g.url or "").strip()
+    lines = [f"{st} ID {g.id} — {g.name}"]
     if u.startswith("/"):
-        link = f"{settings.base_url}{u}"
-        return f"{st} ID {g.id} — {g.name}\n{link}"
-    return f"{st} ID {g.id} — {g.name}"
+        lines.append(f"{settings.base_url}{u}")
+    pv = _preview(g.description, PREVIEW_CHARS)
+    if pv:
+        lines.append(f"Описание: {pv}")
+    lines.append(f"Подробнее: /game {g.id}")
+    return "\n".join(lines)
 
 
 def games_list_text_and_keyboard(
@@ -40,10 +74,10 @@ def games_list_text_and_keyboard(
     body = "\n\n".join(_line(settings, g) for g in chunk)
     text = header + body
 
-    if len(text) > 4000:
+    if len(text) > MSG_SOFT_LIMIT:
         short_chunk = chunk[: max(1, len(chunk) // 2)]
         body = "\n\n".join(_line(settings, g) for g in short_chunk)
-        text = header + body + "\n\n… сокращено (слишком длинные названия)."
+        text = header + body + "\n\n… сокращено: откройте /games и листайте страницы."
 
     rows: list[list[InlineKeyboardButton]] = []
     nav: list[InlineKeyboardButton] = []
@@ -65,3 +99,31 @@ def games_list_text_and_keyboard(
         rows.append(nav)
 
     return text, InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def format_game_detail_chunks(
+    settings: Settings,
+    snap: SiteSnapshot,
+    game_id: int,
+) -> list[str] | None:
+    g = snap.games.get(str(game_id))
+    if g is None:
+        return None
+    head = [
+        f"🎮 {g.name}",
+        f"ID: {g.id}  {'✓ активна' if g.enabled else '✗ неактивна'}",
+    ]
+    if g.good_type:
+        head.append(f"Тип: {g.good_type}")
+    u = (g.url or "").strip()
+    if u.startswith("/"):
+        head.append(f"{settings.base_url}{u}")
+    body = "\n".join(head)
+    desc = (g.description or "").strip()
+    if not desc:
+        return [
+            body
+            + "\n\nОписание пока пустое в снимке. После следующего опроса страницы игры текст появится."
+        ]
+    full = body + "\n\n────────\nОписание:\n" + desc
+    return split_telegram_chunks(full)

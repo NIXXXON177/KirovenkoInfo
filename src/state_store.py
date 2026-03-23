@@ -26,6 +26,7 @@ class GameSnap:
     cat_id: int | None
     enabled: bool
     good_type: str | None = None
+    description: str = ""
 
 
 @dataclass
@@ -68,6 +69,7 @@ class SiteSnapshot:
                 cat_id=g.get("cat_id"),
                 enabled=g.get("enabled", True),
                 good_type=g.get("good_type"),
+                description=str(g.get("description") or ""),
             )
         for pid, p in data.get("products", {}).items():
             snap.products[pid] = ProductSnap(

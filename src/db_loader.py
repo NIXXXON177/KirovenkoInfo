@@ -68,13 +68,21 @@ async def build_snapshot_db_session(session: AsyncSession, cfg: DbSourceConfig) 
         ens = f"{_qi(cfg.game_enabled)} AS g_en"
     else:
         ens = "NULL AS g_en"
+    if cfg.game_description:
+        gdesc = f"{_qi(cfg.game_description)} AS g_desc"
+    else:
+        gdesc = "'' AS g_desc"
     wgame = ""
     if cfg.game_deleted_at:
         wgame = f" WHERE {_qi(cfg.game_deleted_at)} IS NULL"
-    sql_game = text(f"SELECT {gid} AS id, {gname} AS name, {ens} FROM {tg}{wgame}")
+    sql_game = text(
+        f"SELECT {gid} AS id, {gname} AS name, {ens}, {gdesc} FROM {tg}{wgame}"
+    )
     res = await session.execute(sql_game)
     for row in res.mappings():
         i = int(row["id"])
+        gd = row["g_desc"]
+        desc_s = str(gd) if gd is not None else ""
         snap.games[str(i)] = GameSnap(
             id=i,
             name=str(row["name"] or ""),
@@ -82,6 +90,7 @@ async def build_snapshot_db_session(session: AsyncSession, cfg: DbSourceConfig) 
             cat_id=None,
             enabled=_coerce_bool(row["g_en"]),
             good_type="db",
+            description=desc_s,
         )
 
     tp = _qi(cfg.products_table)
