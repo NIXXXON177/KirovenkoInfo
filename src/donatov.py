@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import html as html_lib
+import json
+import logging
+import re
+from typing import Any
+
+import aiohttp
+
+from .state_store import CategorySnap, GameSnap, ProductSnap, SiteSnapshot
+
+log = logging.getLogger(__name__)
+
+GOOD_ID_RE = re.compile(r"/cover/good-(\d+)-", re.I)
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def _game_id_from_cover(cover: str | None) -> int | None:
+    if not cover:
+        return None
+    m = GOOD_ID_RE.search(cover)
+    return int(m.group(1)) if m else None
+
+
+def _extract_vue_resource(html: str) -> dict[str, Any] | None:
+    start = html.find('<vue-good-page')
+    if start == -1:
+        return None
+    chunk = html[start:]
+    key = ':resource="'
+    j = chunk.find(key)
+    if j == -1:
+        return None
+    j = start + j + len(key)
+    rest = html[j:]
+    end = rest.find('"></vue-good-page>')
+    if end == -1:
+        return None
+    raw = html_lib.unescape(rest[:end])
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        log.debug("vue-good-page JSON parse error: %s", e)
+        return None
+
+
+def _iter_ld_nodes(obj: Any) -> list[dict[str, Any]]:
+    if isinstance(obj, dict):
+        if "@graph" in obj:
+            return [n for n in obj["@graph"] if isinstance(n, dict)]
+        return [obj]
+    return []
+
+
+def _availability_in_stock(availability: str | None) -> bool:
+    if not availability:
+        return True
+    return "InStock" in availability or "LimitedAvailability" in availability
+
+
+def offers_from_ld_json(html: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for m in re.finditer(
+        r'<script\s+type="application/ld\+json"\s*>(.*?)</script>',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        raw = m.group(1).strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        for node in _iter_ld_nodes(data):
+            offers = node.get("offers")
+            if isinstance(offers, list):
+                for o in offers:
+                    if isinstance(o, dict) and o.get("@type") == "Offer":
+                        out.append(o)
+            elif isinstance(offers, dict) and offers.get("@type") == "Offer":
+                out.append(offers)
+    return out
+
+
+def _sku_to_int(sku: str | None) -> int | None:
+    if not sku or not isinstance(sku, str):
+        return None
+    sku = sku.strip().upper()
+    if sku.startswith("P") and sku[1:].isdigit():
+        return int(sku[1:])
+    if sku.isdigit():
+        return int(sku)
+    return None
+
+
+def products_from_offers(offers: list[dict[str, Any]]) -> dict[str, ProductSnap]:
+    products: dict[str, ProductSnap] = {}
+    for o in offers:
+        sku = o.get("sku")
+        pid = _sku_to_int(sku)
+        if pid is None:
+            continue
+        name = str(o.get("name") or "").strip() or f"#{pid}"
+        price = str(o.get("price") or "").strip() or "—"
+        in_stock = _availability_in_stock(str(o.get("availability") or ""))
+        key = str(pid)
+        products[key] = ProductSnap(
+            id=pid, name=name, price=price, in_stock=in_stock, description=""
+        )
+    return products
+
+
+async def fetch_text(session: aiohttp.ClientSession, url: str, timeout: int) -> str:
+    async with session.get(
+        url,
+        timeout=aiohttp.ClientTimeout(total=timeout),
+        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/json"},
+    ) as resp:
+        resp.raise_for_status()
+        return await resp.text()
+
+
+async def fetch_json(session: aiohttp.ClientSession, url: str, timeout: int) -> Any:
+    async with session.get(
+        url,
+        timeout=aiohttp.ClientTimeout(total=timeout),
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    ) as resp:
+        resp.raise_for_status()
+        return await resp.json()
+
+
+async def build_snapshot(base_url: str, session: aiohttp.ClientSession, timeout: int) -> SiteSnapshot:
+    list_url = f"{base_url}/good/list/json"
+    payload = await fetch_json(session, list_url, timeout)
+    data = payload.get("data") or {}
+
+    snap = SiteSnapshot()
+
+    for c in data.get("cats") or []:
+        if not isinstance(c, dict):
+            continue
+        cid = int(c["id"])
+        key = str(cid)
+        snap.categories[key] = CategorySnap(
+            id=cid,
+            name=str(c.get("name") or ""),
+            slug=str(c.get("slug") or ""),
+        )
+
+    for item in data.get("catalog") or []:
+        if not isinstance(item, dict):
+            continue
+        gid = _game_id_from_cover(item.get("cover"))
+        if gid is None:
+            log.warning("Catalog row without good-* id in cover, skipped: %s", item.get("url"))
+            continue
+        url_path = str(item.get("url") or "")
+        if not url_path.startswith("/"):
+            url_path = "/" + url_path
+        cat_id = item.get("cat_id")
+        snap.games[str(gid)] = GameSnap(
+            id=gid,
+            name=str(item.get("name") or ""),
+            url=url_path,
+            cat_id=int(cat_id) if cat_id is not None else None,
+            enabled=True,
+            good_type=None,
+        )
+
+    return snap
+
+
+async def enrich_game_and_products(
+    base_url: str,
+    session: aiohttp.ClientSession,
+    timeout: int,
+    game: GameSnap,
+) -> tuple[GameSnap, dict[str, ProductSnap]]:
+    url = f"{base_url}{game.url}"
+    try:
+        html = await fetch_text(session, url, timeout)
+    except Exception as e:
+        log.warning("Failed to fetch game page %s: %s", url, e)
+        return game, {}
+
+    resource = _extract_vue_resource(html)
+    enabled = game.enabled
+    good_type = game.good_type
+    name = game.name
+    if resource:
+        g = resource.get("good") or {}
+        if isinstance(g, dict):
+            if "enabled" in g:
+                enabled = bool(g["enabled"])
+            good_type = str(g.get("type") or good_type or "")
+            name = str(g.get("name") or name)
+
+    updated = GameSnap(
+        id=game.id,
+        name=name,
+        url=game.url,
+        cat_id=game.cat_id,
+        enabled=enabled,
+        good_type=good_type,
+    )
+
+    products: dict[str, ProductSnap] = {}
+    if good_type == "pack":
+        offers = offers_from_ld_json(html)
+        products = products_from_offers(offers)
+    elif good_type == "broker":
+        log.debug("Game %s is broker type — offers are not in JSON-LD; products skipped", game.id)
+    else:
+        offers = offers_from_ld_json(html)
+        if offers:
+            products = products_from_offers(offers)
+
+    return updated, products
