@@ -15,6 +15,10 @@ class GamesListCb(CallbackData, prefix="gl"):
     page: int
 
 
+class GameDetailCb(CallbackData, prefix="gd"):
+    game_id: int
+
+
 def split_telegram_chunks(text: str, limit: int = MSG_SOFT_LIMIT) -> list[str]:
     if len(text) <= limit:
         return [text]
@@ -52,13 +56,24 @@ def _line(settings: Settings, g: GameSnap) -> str:
     pv = _preview(g.description, PREVIEW_CHARS)
     if pv:
         lines.append(f"Описание: {pv}")
-        lines.append(f"Полный текст (если длинное): /game {g.id}")
     else:
-        lines.append(
-            "Описание в снимке пустое (после опроса подтянется). "
-            f"Полный текст: /game {g.id}"
-        )
+        lines.append("Описание: (обновится при следующем опросе)")
     return "\n".join(lines)
+
+
+def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Main menu with quick access buttons."""
+    rows = [
+        [
+            InlineKeyboardButton(text="📋 Список игр", callback_data="main_games"),
+            InlineKeyboardButton(text="📦 Товары", callback_data="main_products"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Статус", callback_data="main_status"),
+            InlineKeyboardButton(text="ℹ️ Помощь", callback_data="main_help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def games_list_text_and_keyboard(
@@ -69,15 +84,19 @@ def games_list_text_and_keyboard(
     games = sorted(snap.games.values(), key=lambda x: (x.name or "").lower())
     n = len(games)
     if n == 0:
-        return "В снимке пока нет игр.", None
+        return (
+            "В снимке пока нет игр.",
+            InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="← Назад в меню", callback_data="back_menu")
+            ]])
+        )
 
     total_pages = max(1, (n + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
     chunk = games[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
 
     header = (
-        f"🎮 Игры: всего {n}, страница {page + 1} из {total_pages}\n"
-        f"Полное описание игры: /game и ID (число в строке «ID …»).\n\n"
+        f"🎮 Игры: всего {n}, страница {page + 1} из {total_pages}\n\n"
     )
     body = "\n\n".join(_line(settings, g) for g in chunk)
     text = header + body
@@ -85,10 +104,11 @@ def games_list_text_and_keyboard(
     if len(text) > MSG_SOFT_LIMIT:
         short_chunk = chunk[: max(1, len(chunk) // 2)]
         body = "\n\n".join(_line(settings, g) for g in short_chunk)
-        text = header + body + "\n\n… сокращено: откройте /games и листайте страницы."
+        text = header + body + "\n\n(сокращено, листайте дальше)"
 
     rows: list[list[InlineKeyboardButton]] = []
     nav: list[InlineKeyboardButton] = []
+    
     if page > 0:
         nav.append(
             InlineKeyboardButton(
@@ -96,6 +116,9 @@ def games_list_text_and_keyboard(
                 callback_data=GamesListCb(page=page - 1).pack(),
             )
         )
+    
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    
     if page < total_pages - 1:
         nav.append(
             InlineKeyboardButton(
@@ -103,10 +126,13 @@ def games_list_text_and_keyboard(
                 callback_data=GamesListCb(page=page + 1).pack(),
             )
         )
+    
     if nav:
         rows.append(nav)
+    
+    rows.append([InlineKeyboardButton(text="← Назад в меню", callback_data="back_menu")])
 
-    return text, InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def format_game_detail_chunks(

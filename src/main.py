@@ -20,6 +20,7 @@ from .games_ui import (
     GamesListCb,
     format_game_detail_chunks,
     games_list_text_and_keyboard,
+    get_main_menu_keyboard,
 )
 from .db_loader import build_snapshot_db_session
 from .diff_events import diff_snapshots
@@ -213,18 +214,40 @@ async def poll_loop_database(bot: Bot, settings) -> None:
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     await message.answer(
-        "Бот мониторинга Donatov.net.\n"
-        "Команды:\n"
-        "/status — сводка по последнему снимку.\n"
-        "/games — список игр по страницам.\n"
-        "/game ID — полное описание игры (ID из /games).\n"
-        "Первый успешный опрос сохраняет базу без уведомлений."
+        "👋 Добро пожаловать в бот мониторинга Donatov.net!\n\n"
+        "Этот бот отслеживает изменения:\n"
+        "🎮 Игр\n"
+        "📂 Категорий\n"
+        "📦 Товаров\n\n"
+        "Выберите действие ниже или используйте команды:\n"
+        "/status — текущий статус\n"
+        "/games ID — информация о конкретной игре\n"
+        "/help — справка по командам",
+        reply_markup=get_main_menu_keyboard(),
     )
 
 
 @router.message(Command("myid"))
 async def cmd_myid(message: Message) -> None:
     await message.answer(f"Ваш chat id: {message.chat.id}")
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await message.answer(
+        "📚 Справка по командам бота:\n\n"
+        "/start — главное меню\n"
+        "/status — сводка по последнему снимку\n"
+        "/games — список всех игр (с пагинацией)\n"
+        "/game ID — полная информация об игре (например: /game 104)\n"
+        "/help — эта справка\n\n"
+        "🔔 Бот автоматически отправляет уведомления об изменениях:\n"
+        "✅ Добавлены/удалены игры\n"
+        "✅ Добавлены/удалены категории\n"
+        "✅ Добавлены/удалены/изменены товары\n"
+        "✅ Изменены цены и описания товаров",
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 @router.message(Command("status"))
@@ -294,6 +317,82 @@ async def on_games_page(callback: CallbackQuery, callback_data: GamesListCb) -> 
         log.exception("games list edit failed")
         await callback.answer("Не удалось обновить список.", show_alert=True)
         return
+    await callback.answer()
+
+
+@router.callback_query(lambda q: q.data in [
+    "main_games", "main_products", "main_status", "main_help", "back_menu", "noop"
+])
+async def on_main_menu(callback: CallbackQuery) -> None:
+    """Handle main menu buttons."""
+    settings = load_settings()
+    
+    if callback.data == "main_games":
+        snap = load_snapshot(settings.state_path)
+        if not snap:
+            await callback.answer("Снимок ещё не создан.", show_alert=True)
+            return
+        text, kb = games_list_text_and_keyboard(settings, snap, page=0)
+        if callback.message:
+            try:
+                await callback.message.edit_text(text, reply_markup=kb)
+            except Exception:
+                pass
+    
+    elif callback.data == "main_status":
+        snap = load_snapshot(settings.state_path)
+        if not snap:
+            status_text = "❌ Снимок ещё не создан — дождитесь первого опроса."
+        else:
+            src = "📂 БД" if settings.data_source == "database" else "🌐 Сайт"
+            status_text = (
+                f"📊 Текущий статус:\n\n"
+                f"Источник: {src}\n"
+                f"🎮 Игр: {len(snap.games)}\n"
+                f"📂 Категорий: {len(snap.categories)}\n"
+                f"📦 Товаров: {len(snap.products)}\n"
+                f"⏱️ Интервал опроса: {settings.poll_interval_sec}с"
+            )
+        if callback.message:
+            try:
+                await callback.message.edit_text(status_text, reply_markup=get_main_menu_keyboard())
+            except Exception:
+                pass
+    
+    elif callback.data == "main_help":
+        help_text = (
+            "📚 Справка по командам бота:\n\n"
+            "/start — главное меню\n"
+            "/status — сводка по последнему снимку\n"
+            "/games — список всех игр\n"
+            "/game ID — информация об игре (например: /game 104)\n"
+            "/help — эта справка\n\n"
+            "🔔 Бот отслеживает:\n"
+            "✅ Добавление/удаление игр\n"
+            "✅ Добавление/удаление категорий\n"
+            "✅ Добавление/удаление товаров\n"
+            "✅ Изменение цен товаров"
+        )
+        if callback.message:
+            try:
+                await callback.message.edit_text(help_text, reply_markup=get_main_menu_keyboard())
+            except Exception:
+                pass
+    
+    elif callback.data == "back_menu":
+        if callback.message:
+            try:
+                await callback.message.edit_text(
+                    "🏠 Главное меню",
+                    reply_markup=get_main_menu_keyboard()
+                )
+            except Exception:
+                pass
+    
+    elif callback.data == "noop":
+        await callback.answer()
+        return
+    
     await callback.answer()
 
 
