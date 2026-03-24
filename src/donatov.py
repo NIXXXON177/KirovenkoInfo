@@ -216,6 +216,7 @@ async def enrich_game_and_products(
     game: GameSnap,
 ) -> tuple[GameSnap, dict[str, ProductSnap]]:
     url = f"{base_url}{game.url}"
+    log.debug("Enriching game %d: %s", game.id, url)
     try:
         html = await fetch_text(session, url, timeout)
     except Exception as e:
@@ -237,7 +238,10 @@ async def enrich_game_and_products(
             name = str(g.get("name") or name)
 
         description = _game_description_from_resource(resource)
+        if description:
+            log.info("Game %d: description from resource (vue): %d chars", game.id, len(description))
 
+    # Try various ways to extract description from HTML
     if not description:
         m = re.search(
             r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
@@ -246,6 +250,8 @@ async def enrich_game_and_products(
         )
         if m:
             description = _html_to_plain(m.group(1))
+            if description:
+                log.info("Game %d: description from content div: %d chars", game.id, len(description))
 
     if not description:
         m = re.search(
@@ -255,6 +261,48 @@ async def enrich_game_and_products(
         )
         if m:
             description = html_lib.unescape(m.group(1)).strip()
+            if description:
+                log.info("Game %d: description from meta: %d chars", game.id, len(description))
+
+    # Try to find description in article or section tags
+    if not description:
+        m = re.search(
+            r'<article[^>]*>(.*?)</article>|<section[^>]*>(.*?)</section>',
+            html,
+            re.S | re.I,
+        )
+        if m:
+            desc_html = m.group(1) or m.group(2)
+            description = _html_to_plain(desc_html)
+            if description:
+                log.info("Game %d: description from article/section: %d chars", game.id, len(description))
+
+    # Try to find any text content after certain markers
+    if not description:
+        m = re.search(
+            r'<h1[^>]*>.*?</h1>(.*?)(?:<h2|<footer|<script|$)',
+            html,
+            re.S | re.I,
+        )
+        if m:
+            description = _html_to_plain(m.group(1))
+            if description:
+                log.info("Game %d: description from h1 context: %d chars", game.id, len(description))
+
+    # Try Open Graph description
+    if not description:
+        m = re.search(
+            r'<meta\s+property="og:description"\s+content="([^"]*)"',
+            html,
+            re.I,
+        )
+        if m:
+            description = html_lib.unescape(m.group(1)).strip()
+            if description:
+                log.info("Game %d: description from og:description: %d chars", game.id, len(description))
+
+    if not description:
+        log.warning("Game %d (%s): no description extracted from %s", game.id, game.name, url)
 
     updated = GameSnap(
         id=game.id,
@@ -271,7 +319,7 @@ async def enrich_game_and_products(
         offers = offers_from_ld_json(html)
         products = products_from_offers(offers)
     elif good_type == "broker":
-        log.debug("Game %s is broker type — offers are not in JSON-LD; products skipped", game.id)
+        log.info("Game %s is broker type — offers are not in JSON-LD; products skipped", game.id)
     else:
         offers = offers_from_ld_json(html)
         if offers:

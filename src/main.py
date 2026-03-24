@@ -104,6 +104,7 @@ async def _finalize_poll(bot: Bot, settings, snap: SiteSnapshot, src_label: str)
 async def _poll_once_site(bot: Bot, settings, session: aiohttp.ClientSession) -> None:
     base = await build_snapshot(settings.base_url, session, settings.request_timeout_sec)
     sem = asyncio.Semaphore(settings.fetch_concurrency)
+    log.info("Built base snapshot with %d games, now enriching...", len(base.games))
 
     async def one(g):
         async with sem:
@@ -118,12 +119,18 @@ async def _poll_once_site(bot: Bot, settings, session: aiohttp.ClientSession) ->
     pairs = await asyncio.gather(*[one(g) for g in games], return_exceptions=True)
 
     snap = base
+    n_enriched = 0
+    n_failed = 0
     for i, result in enumerate(pairs):
         if isinstance(result, BaseException):
-            log.exception("Enrich failed")
+            games_list = list(base.games.values())
+            game_id = games_list[i].id if i < len(games_list) else "?"
+            log.error("Enrich failed for game %s: %s", game_id, result, exc_info=result)
+            n_failed += 1
             continue
         g_new, prods = result
         snap.games[str(g_new.id)] = g_new
+        n_enriched += 1
         for pid, p in prods.items():
             if pid in snap.products:
                 prev = snap.products[pid]
@@ -135,11 +142,22 @@ async def _poll_once_site(bot: Bot, settings, session: aiohttp.ClientSession) ->
                         prev.name,
                     )
             snap.products[pid] = p
+    
+    log.info("Enrichment completed: %d games enriched, %d failed", n_enriched, n_failed)
 
     await _finalize_poll(bot, settings, snap, "site")
     n_broker = sum(1 for g in snap.games.values() if g.good_type == "broker")
     if n_broker:
         log.info("Broker games (no JSON-LD list): %d", n_broker)
+    
+    # Log description statistics
+    n_with_desc = sum(1 for g in snap.games.values() if g.description)
+    n_no_desc = sum(1 for g in snap.games.values() if not g.description)
+    log.info(
+        "Descriptions: %d games with descriptions, %d games without",
+        n_with_desc,
+        n_no_desc,
+    )
 
 
 async def poll_loop_site(bot: Bot, settings) -> None:
