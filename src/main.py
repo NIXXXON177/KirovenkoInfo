@@ -10,7 +10,7 @@ from pathlib import Path
 import aiohttp
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -88,7 +88,28 @@ async def _finalize_poll(bot: Bot, settings, snap: SiteSnapshot, src_label: str)
     events = diff_snapshots(old, snap)
     for ev in events:
         for chat_id in settings.chat_ids:
-            await bot.send_message(chat_id, ev.text)
+            try:
+                await bot.send_message(chat_id, ev.text)
+                # Add small delay to avoid Telegram flood control
+                await asyncio.sleep(0.5)
+            except TelegramRetryAfter as e:
+                log.warning(
+                    "Telegram flood control: need to wait %d seconds before retry",
+                    e.retry_after,
+                )
+                await asyncio.sleep(e.retry_after + 1)
+                try:
+                    await bot.send_message(chat_id, ev.text)
+                except Exception as ex:
+                    log.error(
+                        "Failed to send message after retry to %s: %s",
+                        chat_id,
+                        ex,
+                    )
+            except TelegramNetworkError as e:
+                log.warning("Telegram network error while sending to %s: %s", chat_id, e)
+            except Exception as e:
+                log.error("Failed to send message to %s: %s", chat_id, e)
         log.info("Notify: %s", ev.text.replace("\n", " | "))
     save_snapshot(settings.state_path, snap)
     log.info(
