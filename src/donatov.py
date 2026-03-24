@@ -46,16 +46,24 @@ def _html_to_plain(html_s: str) -> str:
 def _game_description_from_resource(resource: dict[str, Any]) -> str:
     data = resource.get("data")
     if not isinstance(data, dict):
+        log.debug("_game_description_from_resource: data is not dict")
         return ""
     html_d = str(data.get("description_html") or "").strip()
     if html_d:
         plain = _html_to_plain(html_d)
         if plain:
+            log.debug("_game_description_from_resource: using description_html (%d chars)", len(plain))
             return plain
+        else:
+            log.debug("_game_description_from_resource: description_html is empty after parsing")
     short_d = str(data.get("short_description") or "").strip()
     if short_d:
+        log.debug("_game_description_from_resource: using short_description (%d chars)", len(short_d))
         return short_d
-    return str(data.get("meta_description") or "").strip()
+    meta_d = str(data.get("meta_description") or "").strip()
+    if meta_d:
+        log.debug("_game_description_from_resource: using meta_description (%d chars)", len(meta_d))
+    return meta_d
 
 
 def _extract_vue_resource(html: str) -> dict[str, Any] | None:
@@ -219,6 +227,7 @@ async def enrich_game_and_products(
     log.debug("Enriching game %d: %s", game.id, url)
     try:
         html = await fetch_text(session, url, timeout)
+        log.debug("Game %d: fetched %d bytes of HTML", game.id, len(html))
     except Exception as e:
         log.warning("Failed to fetch game page %s: %s", url, e)
         return game, {}
@@ -230,6 +239,7 @@ async def enrich_game_and_products(
     description = ""
 
     if resource:
+        log.debug("Game %d: Found vue resource", game.id)
         g = resource.get("good") or {}
         if isinstance(g, dict):
             if "enabled" in g:
@@ -240,8 +250,11 @@ async def enrich_game_and_products(
         description = _game_description_from_resource(resource)
         if description:
             log.info("Game %d: description from resource (vue): %d chars", game.id, len(description))
+        else:
+            log.debug("Game %d: vue resource found but no description extracted", game.id)
+    else:
+        log.debug("Game %d: No vue resource found in HTML", game.id)
 
-    # Try various ways to extract description from HTML
     if not description:
         m = re.search(
             r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
@@ -252,6 +265,10 @@ async def enrich_game_and_products(
             description = _html_to_plain(m.group(1))
             if description:
                 log.info("Game %d: description from content div: %d chars", game.id, len(description))
+            else:
+                log.debug("Game %d: content div found but empty after parsing", game.id)
+        else:
+            log.debug("Game %d: no content div found", game.id)
 
     if not description:
         m = re.search(
@@ -263,8 +280,11 @@ async def enrich_game_and_products(
             description = html_lib.unescape(m.group(1)).strip()
             if description:
                 log.info("Game %d: description from meta: %d chars", game.id, len(description))
+            else:
+                log.debug("Game %d: meta description found but empty", game.id)
+        else:
+            log.debug("Game %d: no meta description found", game.id)
 
-    # Try to find description in article or section tags
     if not description:
         m = re.search(
             r'<article[^>]*>(.*?)</article>|<section[^>]*>(.*?)</section>',
@@ -276,8 +296,11 @@ async def enrich_game_and_products(
             description = _html_to_plain(desc_html)
             if description:
                 log.info("Game %d: description from article/section: %d chars", game.id, len(description))
+            else:
+                log.debug("Game %d: article/section found but empty after parsing", game.id)
+        else:
+            log.debug("Game %d: no article/section found", game.id)
 
-    # Try to find any text content after certain markers
     if not description:
         m = re.search(
             r'<h1[^>]*>.*?</h1>(.*?)(?:<h2|<footer|<script|$)',
@@ -288,8 +311,11 @@ async def enrich_game_and_products(
             description = _html_to_plain(m.group(1))
             if description:
                 log.info("Game %d: description from h1 context: %d chars", game.id, len(description))
+            else:
+                log.debug("Game %d: h1 context found but empty after parsing", game.id)
+        else:
+            log.debug("Game %d: no h1 context found", game.id)
 
-    # Try Open Graph description
     if not description:
         m = re.search(
             r'<meta\s+property="og:description"\s+content="([^"]*)"',
@@ -300,6 +326,10 @@ async def enrich_game_and_products(
             description = html_lib.unescape(m.group(1)).strip()
             if description:
                 log.info("Game %d: description from og:description: %d chars", game.id, len(description))
+            else:
+                log.debug("Game %d: og:description found but empty", game.id)
+        else:
+            log.debug("Game %d: no og:description found", game.id)
 
     if not description:
         log.warning("Game %d (%s): no description extracted from %s", game.id, game.name, url)
