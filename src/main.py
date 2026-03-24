@@ -120,7 +120,7 @@ async def _poll_once_site(bot: Bot, settings, session: aiohttp.ClientSession) ->
     snap = base
     for i, result in enumerate(pairs):
         if isinstance(result, BaseException):
-            log.error("Enrich failed for game %s: %s", games[i].id, result)
+            log.exception("Enrich failed")
             continue
         g_new, prods = result
         snap.games[str(g_new.id)] = g_new

@@ -227,6 +227,7 @@ async def enrich_game_and_products(
     good_type = game.good_type
     name = game.name
     description = ""
+
     if resource:
         g = resource.get("good") or {}
         if isinstance(g, dict):
@@ -234,7 +235,18 @@ async def enrich_game_and_products(
                 enabled = bool(g["enabled"])
             good_type = str(g.get("type") or good_type or "")
             name = str(g.get("name") or name)
+
         description = _game_description_from_resource(resource)
+
+    if not description:
+        m = re.search(
+            r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
+            html,
+            re.S | re.I,
+        )
+        if m:
+            description = _html_to_plain(m.group(1))
+
     if not description:
         m = re.search(
             r'<meta\s+name="description"\s+content="([^"]*)"',
