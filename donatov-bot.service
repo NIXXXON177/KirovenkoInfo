@@ -1,0 +1,26 @@
+[Unit]
+Description=Donatov.net Monitoring Telegram Bot
+Documentation=https://github.com/NIXXXON177/KirovenkoInfo
+After=network-online.target
+Requires=network-online.target
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/KirovenkoInfo
+Environment="PATH=/opt/KirovenkoInfo/venv/bin"
+ExecStart=/opt/KirovenkoInfo/venv/bin/python -u /opt/KirovenkoInfo/run_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=donatov-bot
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/KirovenkoInfo/data
+
+[Install]
+WantedBy=multi-user.target
