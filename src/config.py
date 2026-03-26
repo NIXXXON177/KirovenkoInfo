@@ -26,6 +26,11 @@ class Settings:
     telegram_proxy: str | None = None
     telegram_timeout_sec: float = 120.0
     telegram_api_retries: int = 5
+    no_changes_sticker_file_id: str | None = None
+    no_changes_sticker_cooldown_sec: int = 3600
+    no_changes_custom_emoji_id: str | None = None
+    no_changes_quiet_text: str = "Без изменений на сайте."
+    no_changes_custom_emoji_fallback: str = "✅"
 
 
 def _parse_chat_ids(raw: str) -> tuple[int, ...]:
@@ -56,6 +61,12 @@ def load_settings() -> Settings:
     if data_source == "database":
         db_cfg = load_db_source_config()
 
+    quiet_sticker = os.getenv("NO_CHANGES_STICKER_FILE_ID", "").strip()
+    quiet_cooldown = int(os.getenv("NO_CHANGES_STICKER_COOLDOWN_SEC", "3600"))
+    quiet_emoji = os.getenv("NO_CHANGES_CUSTOM_EMOJI_ID", "").strip()
+    quiet_msg = os.getenv("NO_CHANGES_QUIET_TEXT", "Без изменений на сайте.").strip()
+    quiet_fb = os.getenv("NO_CHANGES_CUSTOM_EMOJI_FALLBACK", "✅").strip() or "✅"
+
     return Settings(
         bot_token=token,
         chat_ids=_parse_chat_ids(chats),
@@ -70,4 +81,9 @@ def load_settings() -> Settings:
         telegram_proxy=proxy or None,
         telegram_timeout_sec=float(os.getenv("TELEGRAM_TIMEOUT_SEC", "120")),
         telegram_api_retries=int(os.getenv("TELEGRAM_API_RETRIES", "5")),
+        no_changes_sticker_file_id=quiet_sticker or None,
+        no_changes_sticker_cooldown_sec=max(0, quiet_cooldown),
+        no_changes_custom_emoji_id=quiet_emoji or None,
+        no_changes_quiet_text=quiet_msg or "Без изменений на сайте.",
+        no_changes_custom_emoji_fallback=quiet_fb,
     )

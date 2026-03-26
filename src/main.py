@@ -4,12 +4,15 @@ import asyncio
 import contextlib
 import logging
 import sys
+import time
+from html import escape
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import aiohttp
 from aiogram import Bot, Dispatcher, Router
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, ErrorEvent, Message
@@ -84,6 +87,24 @@ def _setup_logging(level: str, log_dir: Path) -> None:
     root.addHandler(fh)
 
 
+def _quiet_sticker_marker_path(state_path: str) -> Path:
+    return Path(state_path).parent / ".last_no_changes_sticker_at"
+
+
+def _read_quiet_sticker_sent_at(path: Path) -> float | None:
+    if not path.is_file():
+        return None
+    try:
+        return float(path.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _write_quiet_sticker_sent_at(path: Path, ts: float) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(ts), encoding="utf-8")
+
+
 async def _finalize_poll(bot: Bot, settings, snap: SiteSnapshot, src_label: str) -> None:
     old = load_snapshot(settings.state_path)
     events = diff_snapshots(old, snap)
@@ -112,6 +133,111 @@ async def _finalize_poll(bot: Bot, settings, snap: SiteSnapshot, src_label: str)
             except Exception as e:
                 log.error("Failed to send message to %s: %s", chat_id, e)
         log.info("Notify: %s", ev.text.replace("\n", " | "))
+
+    use_emoji = bool(settings.no_changes_custom_emoji_id)
+    use_sticker = bool(settings.no_changes_sticker_file_id) and not use_emoji
+    if not events and old is not None and (use_emoji or use_sticker):
+        marker = _quiet_sticker_marker_path(settings.state_path)
+        now = time.time()
+        last = _read_quiet_sticker_sent_at(marker)
+        cooldown = settings.no_changes_sticker_cooldown_sec
+        if last is None or now - last >= cooldown:
+            any_ok = False
+            if use_emoji:
+                eid = settings.no_changes_custom_emoji_id or ""
+                if not eid.isdigit():
+                    log.error(
+                        "NO_CHANGES_CUSTOM_EMOJI_ID must be a numeric Telegram custom emoji id"
+                    )
+                else:
+                    quiet_html = (
+                        f"{escape(settings.no_changes_quiet_text)} "
+                        f'<tg-emoji emoji-id="{eid}">'
+                        f"{escape(settings.no_changes_custom_emoji_fallback)}"
+                        f"</tg-emoji>"
+                    )
+                    for chat_id in settings.chat_ids:
+                        try:
+                            await bot.send_message(
+                                chat_id,
+                                quiet_html,
+                                parse_mode=ParseMode.HTML,
+                            )
+                            any_ok = True
+                            await asyncio.sleep(0.5)
+                        except TelegramRetryAfter as e:
+                            log.warning(
+                                "Telegram flood control (quiet emoji): wait %d s",
+                                e.retry_after,
+                            )
+                            await asyncio.sleep(e.retry_after + 1)
+                            try:
+                                await bot.send_message(
+                                    chat_id,
+                                    quiet_html,
+                                    parse_mode=ParseMode.HTML,
+                                )
+                                any_ok = True
+                            except Exception as ex:
+                                log.error(
+                                    "Failed no-changes emoji message after retry to %s: %s",
+                                    chat_id,
+                                    ex,
+                                )
+                        except TelegramNetworkError as e:
+                            log.warning(
+                                "Telegram network error (quiet emoji) to %s: %s",
+                                chat_id,
+                                e,
+                            )
+                        except Exception as e:
+                            log.error(
+                                "Failed no-changes emoji message to %s: %s",
+                                chat_id,
+                                e,
+                            )
+            else:
+                sticker_id = settings.no_changes_sticker_file_id
+                for chat_id in settings.chat_ids:
+                    try:
+                        await bot.send_sticker(chat_id, sticker=sticker_id)
+                        any_ok = True
+                        await asyncio.sleep(0.5)
+                    except TelegramRetryAfter as e:
+                        log.warning(
+                            "Telegram flood control (sticker): wait %d s",
+                            e.retry_after,
+                        )
+                        await asyncio.sleep(e.retry_after + 1)
+                        try:
+                            await bot.send_sticker(chat_id, sticker=sticker_id)
+                            any_ok = True
+                        except Exception as ex:
+                            log.error(
+                                "Failed to send no-changes sticker after retry to %s: %s",
+                                chat_id,
+                                ex,
+                            )
+                    except TelegramNetworkError as e:
+                        log.warning(
+                            "Telegram network error (no-changes sticker) to %s: %s",
+                            chat_id,
+                            e,
+                        )
+                    except Exception as e:
+                        log.error(
+                            "Failed to send no-changes sticker to %s: %s",
+                            chat_id,
+                            e,
+                        )
+            if any_ok:
+                _write_quiet_sticker_sent_at(marker, now)
+                log.info(
+                    "No site changes — quiet signal sent (cooldown=%ss, kind=%s)",
+                    cooldown,
+                    "custom_emoji" if use_emoji else "sticker",
+                )
+
     save_snapshot(settings.state_path, snap)
     log.info(
         "Poll done (%s): categories=%d games=%d products=%d events=%d",
