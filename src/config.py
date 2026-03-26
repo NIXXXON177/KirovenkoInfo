@@ -31,11 +31,19 @@ class Settings:
     no_changes_custom_emoji_id: str | None = None
     no_changes_quiet_text: str = "Без изменений на сайте."
     no_changes_custom_emoji_fallback: str = "✅"
+    no_changes_plain_text_notify: bool = True
 
 
 def _parse_chat_ids(raw: str) -> tuple[int, ...]:
     parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
     return tuple(int(p) for p in parts)
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def load_settings() -> Settings:
@@ -66,6 +74,7 @@ def load_settings() -> Settings:
     quiet_emoji = os.getenv("NO_CHANGES_CUSTOM_EMOJI_ID", "").strip()
     quiet_msg = os.getenv("NO_CHANGES_QUIET_TEXT", "Без изменений на сайте.").strip()
     quiet_fb = os.getenv("NO_CHANGES_CUSTOM_EMOJI_FALLBACK", "✅").strip() or "✅"
+    quiet_plain = _env_bool("NO_CHANGES_PLAIN_TEXT", True)
 
     return Settings(
         bot_token=token,
@@ -86,4 +95,5 @@ def load_settings() -> Settings:
         no_changes_custom_emoji_id=quiet_emoji or None,
         no_changes_quiet_text=quiet_msg or "Без изменений на сайте.",
         no_changes_custom_emoji_fallback=quiet_fb,
+        no_changes_plain_text_notify=quiet_plain,
     )
