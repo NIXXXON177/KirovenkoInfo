@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""
-Test script to debug description extraction for specific games.
-"""
 import asyncio
 import logging
 import sys
 from pathlib import Path
 
-# Setup logging to see all details
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -29,7 +25,6 @@ log = logging.getLogger(__name__)
 
 
 async def test_game_enrichment(game_id: int, game_url: str, game_name: str):
-    """Test enrichment for a specific game."""
     print(f"\n{'='*60}")
     print(f"Testing Game: {game_name} (ID: {game_id})")
     print(f"URL: https://donatov.net{game_url}")
@@ -74,8 +69,7 @@ async def main():
             print(f"\nERROR testing {name}: {e}")
             import traceback
             traceback.print_exc()
-        
-        # Small delay between requests
+
         await asyncio.sleep(1)
 
 

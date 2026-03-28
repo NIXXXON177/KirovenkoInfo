@@ -26,17 +26,16 @@ def _fmt_rub(price: str) -> str:
     return f"{p}₽"
 
 
+def _stock_label(ok: bool) -> str:
+    return "в наличии" if ok else "нет в наличии"
+
+
 def diff_snapshots(old: SiteSnapshot | None, new: SiteSnapshot) -> list[Event]:
-    """
-    Compare old and new snapshots and generate events for changes.
-    Per spec: Only track CRUD operations, ignore relationships between entities.
-    """
     events: list[Event] = []
     if old is None:
         log.info("Baseline saved: no notifications for this run")
         return events
 
-    # ========== CATEGORIES: Track add/remove only ==========
     old_c, new_c = old.categories, new.categories
     
     for cid, c in new_c.items():
@@ -57,7 +56,6 @@ def diff_snapshots(old: SiteSnapshot | None, new: SiteSnapshot) -> list[Event]:
                 )
             )
 
-    # ========== GAMES: Track add/remove only ==========
     old_g, new_g = old.games, new.games
     
     for gid, g in new_g.items():
@@ -78,16 +76,20 @@ def diff_snapshots(old: SiteSnapshot | None, new: SiteSnapshot) -> list[Event]:
                 )
             )
 
-    # ========== PRODUCTS: Track add/remove/change ==========
     old_p, new_p = old.products, new.products
     
     for pid, p in new_p.items():
         if pid not in old_p:
+            stock_line = (
+                f"\n⚠️ {_stock_label(p.in_stock).capitalize()} на donatov.net"
+                if not p.in_stock
+                else ""
+            )
             events.append(
                 Event(
                     text=(
                         f"🟢 Новый товар\nНазвание: {p.name}\n"
-                        f"Цена: {_fmt_rub(p.price)}\nID: {p.id}"
+                        f"Цена: {_fmt_rub(p.price)}{stock_line}\nID: {p.id}"
                     ),
                     dedupe_key=f"prod+{pid}",
                 )
@@ -101,21 +103,20 @@ def diff_snapshots(old: SiteSnapshot | None, new: SiteSnapshot) -> list[Event]:
                     dedupe_key=f"prod-{pid}",
                 )
             )
-    
-    # Check for product changes (price, name, description)
+
     for pid, p in new_p.items():
         if pid not in old_p:
-            continue  # Already handled as new product
+            continue
         
         op = old_p[pid]
         price_changed = op.price != p.price
         name_changed = op.name != p.name
         desc_changed = (op.description or "") != (p.description or "")
+        stock_changed = op.in_stock != p.in_stock
         
-        if not price_changed and not name_changed and not desc_changed:
+        if not price_changed and not name_changed and not desc_changed and not stock_changed:
             continue
-        
-        # Build notification text
+
         text_parts = [f"🟡 Товар изменён\nНазвание: {p.name}"]
         
         if price_changed:
@@ -127,13 +128,21 @@ def diff_snapshots(old: SiteSnapshot | None, new: SiteSnapshot) -> list[Event]:
         if desc_changed:
             text_parts.append("Описание: изменено")
         
+        if stock_changed:
+            text_parts.append(
+                f"Наличие: {_stock_label(op.in_stock)} → {_stock_label(p.in_stock)}"
+            )
+        
         text_parts.append(f"ID: {p.id}")
         text = "\n".join(text_parts)
         
         events.append(
             Event(
                 text=text,
-                dedupe_key=f"prod~{pid}_{_digest(p.name)}_{_digest(p.price)}_{_digest(p.description)}",
+                dedupe_key=(
+                    f"prod~{pid}_{_digest(p.name)}_{_digest(p.price)}_"
+                    f"{_digest(p.description)}_{int(p.in_stock)}"
+                ),
             )
         )
 

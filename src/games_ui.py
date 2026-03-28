@@ -62,7 +62,6 @@ def _line(settings: Settings, g: GameSnap) -> str:
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Main menu with quick access buttons."""
     rows = [
         [
             InlineKeyboardButton(text="📋 Список игр", callback_data="main_games"),

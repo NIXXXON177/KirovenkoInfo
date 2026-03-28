@@ -143,7 +143,6 @@ async def _finalize_poll(bot: Bot, settings, snap: SiteSnapshot, src_label: str)
         for chat_id in settings.chat_ids:
             try:
                 await bot.send_message(chat_id, ev.text)
-                # Add small delay to avoid Telegram flood control
                 await asyncio.sleep(0.5)
             except TelegramRetryAfter as e:
                 log.warning(
@@ -373,8 +372,7 @@ async def _poll_once_site(bot: Bot, settings, session: aiohttp.ClientSession) ->
     n_broker = sum(1 for g in snap.games.values() if g.good_type == "broker")
     if n_broker:
         log.info("Broker games (no JSON-LD list): %d", n_broker)
-    
-    # Log description statistics
+
     n_with_desc = sum(1 for g in snap.games.values() if g.description)
     n_no_desc = sum(1 for g in snap.games.values() if not g.description)
     log.info(
@@ -526,7 +524,6 @@ async def on_games_page(callback: CallbackQuery, callback_data: GamesListCb) -> 
     "main_games", "main_products", "main_status", "main_help", "back_menu", "noop"
 ])
 async def on_main_menu(callback: CallbackQuery) -> None:
-    """Handle main menu buttons."""
     settings = load_settings()
     
     if callback.data == "main_games":

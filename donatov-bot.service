@@ -16,7 +16,6 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=donatov-bot
 
-# Security settings
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=yes
